@@ -24,5 +24,16 @@
 	"vars": {
 		"DOTENV_PUBLIC_KEY": "03d704dd52fa62efe9d16c36735b1514741bd1bb2b1c01037ab86de41c21156b79",
 		"MY_SECRET": "encrypted:BHqsy5L4LfHjD0zZ96euKQY3CgxAF/9v1cV5ztILUc0QY5cYGVV8eZc7dJvcUYaBcjcPX+dIT/ruuGtwjqTwFQP/hZVnyTGA1zoI/zu2QkowV76JfgkvaYpwPBJLnSfu5wBZnrjzCq6ROx2OR4FTFpdoEZYe97w="
-	}
+	},
+
+	/**
+	 * KV Namespace binding - demonstrates that bindings are preserved
+	 * when using withSecrets(). The KV object passes through unchanged.
+	 */
+	"kv_namespaces": [
+		{
+			"binding": "DEMO_KV",
+			"id": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+		}
+	]
 }

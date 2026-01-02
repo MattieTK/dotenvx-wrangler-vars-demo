@@ -145,12 +145,23 @@ Like `getSecret()` but throws if the secret is not found.
 const apiKey = requireSecret('API_KEY');  // string (throws if missing)
 ```
 
-### `getAllSecrets()`
+### `getBinding<T>(key)`
 
-Returns all decrypted secrets as an object. Useful for debugging or passing to libraries.
+Returns a Cloudflare binding (KV, D1, Durable Objects, R2, Queues, etc.). Bindings pass through `withSecrets()` unchanged.
 
 ```typescript
-const secrets = getAllSecrets();  // Record<string, string>
+const kv = getBinding<KVNamespace>('MY_KV');
+const db = getBinding<D1Database>('DB');
+const bucket = getBinding<R2Bucket>('MY_BUCKET');
+const durableObject = getBinding<DurableObjectNamespace>('MY_DO');
+```
+
+### `getEnv<T>()`
+
+Returns the full env object with decrypted secrets and all bindings preserved.
+
+```typescript
+const env = getEnv<Env>();  // Full typed env object
 ```
 
 ## Production Deployment
@@ -237,6 +248,43 @@ dotenvx uses:
 - **AES-256** for symmetric encryption
 
 Each value is encrypted with a unique ephemeral key, providing forward secrecy.
+
+## Using with Bindings (KV, D1, Durable Objects, etc.)
+
+The `withSecrets()` function **only** decrypts string values that start with `encrypted:`. All other values—including Cloudflare bindings—pass through unchanged.
+
+```typescript
+import { withSecrets, getSecret, getBinding } from './secrets';
+
+export default {
+  async fetch(request, env, ctx) {
+    return withSecrets(env, async () => {
+      // Secrets are decrypted
+      const apiKey = getSecret('API_KEY');
+
+      // Bindings work exactly as normal
+      const kv = getBinding<KVNamespace>('MY_KV');
+      await kv.put('key', 'value');
+
+      const db = getBinding<D1Database>('DB');
+      const result = await db.prepare('SELECT * FROM users').all();
+
+      return new Response('OK');
+    });
+  }
+}
+```
+
+### Verified Bindings
+
+| Binding Type | Works? | Access Pattern |
+|--------------|--------|----------------|
+| KV Namespace | ✅ | `getBinding<KVNamespace>('MY_KV')` |
+| D1 Database | ✅ | `getBinding<D1Database>('DB')` |
+| Durable Objects | ✅ | `getBinding<DurableObjectNamespace>('MY_DO')` |
+| R2 Bucket | ✅ | `getBinding<R2Bucket>('MY_BUCKET')` |
+| Queues | ✅ | `getBinding<Queue>('MY_QUEUE')` |
+| Service Bindings | ✅ | `getBinding<Fetcher>('MY_SERVICE')` |
 
 ## Limitations
 

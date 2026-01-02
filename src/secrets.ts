@@ -2,28 +2,34 @@
  * secrets.ts
  *
  * Simple API for accessing decrypted secrets in Cloudflare Workers.
+ * Preserves all bindings (D1, Durable Objects, KV, R2, etc.) while
+ * decrypting dotenvx-encrypted string values.
  *
  * Usage:
- * 1. Call initSecrets(env) once at the start of your request handler
+ * 1. Call withSecrets(env, handler) to wrap your request handler
  * 2. Import and call getSecret('KEY') from anywhere in your code
+ * 3. Use getBinding<T>('NAME') to access typed bindings
  *
  * @example
  * ```ts
  * // In your handler:
- * import { initSecrets } from './secrets';
+ * import { withSecrets } from './secrets';
  *
  * export default {
  *   async fetch(request, env, ctx) {
- *     initSecrets(env);
- *     return handleRequest(request);
+ *     return withSecrets(env, async () => {
+ *       return handleRequest(request);
+ *     });
  *   }
  * }
  *
  * // In any other file:
- * import { getSecret } from './secrets';
+ * import { getSecret, getBinding } from './secrets';
  *
- * function doSomething() {
+ * async function doSomething() {
  *   const apiKey = getSecret('API_KEY');
+ *   const db = getBinding<D1Database>('DB');
+ *   const kv = getBinding<KVNamespace>('MY_KV');
  * }
  * ```
  */
@@ -31,8 +37,8 @@
 import dotenvx from '@dotenvx/dotenvx';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-// Store for the current request's decrypted secrets
-const secretsStore = new AsyncLocalStorage<Record<string, string>>();
+// Store for the current request's env (with decrypted secrets)
+const envStore = new AsyncLocalStorage<Record<string, unknown>>();
 
 /**
  * Decrypts a single value using dotenvx
@@ -45,7 +51,7 @@ function decrypt(key: string, value: string, privateKey: string, publicKey?: str
 
 /**
  * Initialize secrets for the current request context.
- * Call this once at the start of your request handler.
+ * Decrypts encrypted string values while preserving all bindings.
  *
  * @param env - The Cloudflare Worker env object
  * @param handler - Your request handler function
@@ -56,7 +62,7 @@ function decrypt(key: string, value: string, privateKey: string, publicKey?: str
  * export default {
  *   async fetch(request, env, ctx) {
  *     return withSecrets(env, async () => {
- *       // getSecret() works here and in any called functions
+ *       // getSecret() and getBinding() work here
  *       return handleRequest(request);
  *     });
  *   }
@@ -67,29 +73,29 @@ export function withSecrets<T>(env: Record<string, unknown>, handler: () => T): 
 	const privateKey = env.DOTENV_PRIVATE_KEY as string;
 	const publicKey = env.DOTENV_PUBLIC_KEY as string | undefined;
 
-	// Decrypt all encrypted values
-	const secrets: Record<string, string> = {};
+	// Create a new env object with decrypted secrets
+	// Non-string values (bindings) pass through unchanged
+	const processedEnv: Record<string, unknown> = {};
 
 	for (const [key, value] of Object.entries(env)) {
-		if (typeof value === 'string') {
-			if (value.startsWith('encrypted:') && privateKey) {
-				try {
-					secrets[key] = decrypt(key, value, privateKey, publicKey);
-				} catch (error) {
-					console.error(`[secrets] Failed to decrypt ${key}:`, error);
-					secrets[key] = value;
-				}
-			} else {
-				secrets[key] = value;
+		if (typeof value === 'string' && value.startsWith('encrypted:') && privateKey) {
+			try {
+				processedEnv[key] = decrypt(key, value, privateKey, publicKey);
+			} catch (error) {
+				console.error(`[secrets] Failed to decrypt ${key}:`, error);
+				processedEnv[key] = value;
 			}
+		} else {
+			// Preserve bindings (D1, KV, Durable Objects, etc.) and plain strings
+			processedEnv[key] = value;
 		}
 	}
 
-	return secretsStore.run(secrets, handler);
+	return envStore.run(processedEnv, handler);
 }
 
 /**
- * Get a decrypted secret value.
+ * Get a decrypted secret value (string vars only).
  * Must be called within a withSecrets() context.
  *
  * @param key - The secret name
@@ -103,13 +109,14 @@ export function withSecrets<T>(env: Record<string, unknown>, handler: () => T): 
  * ```
  */
 export function getSecret(key: string): string | undefined {
-	const secrets = secretsStore.getStore();
+	const env = envStore.getStore();
 
-	if (!secrets) {
-		throw new Error('[secrets] getSecret() called outside of withSecrets() context. Wrap your handler with withSecrets(env, () => ...)');
+	if (!env) {
+		throw new Error('[secrets] getSecret() called outside of withSecrets() context');
 	}
 
-	return secrets[key];
+	const value = env[key];
+	return typeof value === 'string' ? value : undefined;
 }
 
 /**
@@ -130,15 +137,43 @@ export function requireSecret(key: string): string {
 }
 
 /**
- * Get all decrypted secrets.
- * Useful for debugging or passing to external libraries.
+ * Get a binding (D1, KV, Durable Objects, R2, Queues, etc.)
+ * Must be called within a withSecrets() context.
+ *
+ * @param key - The binding name
+ * @returns The binding, typed as T
+ * @throws Error if called outside of withSecrets() context
+ *
+ * @example
+ * ```ts
+ * const db = getBinding<D1Database>('DB');
+ * const kv = getBinding<KVNamespace>('MY_KV');
+ * const bucket = getBinding<R2Bucket>('MY_BUCKET');
+ * const durableObject = getBinding<DurableObjectNamespace>('MY_DO');
+ * ```
  */
-export function getAllSecrets(): Record<string, string> {
-	const secrets = secretsStore.getStore();
+export function getBinding<T>(key: string): T {
+	const env = envStore.getStore();
 
-	if (!secrets) {
-		throw new Error('[secrets] getAllSecrets() called outside of withSecrets() context');
+	if (!env) {
+		throw new Error('[secrets] getBinding() called outside of withSecrets() context');
 	}
 
-	return { ...secrets };
+	return env[key] as T;
+}
+
+/**
+ * Get the full env object with decrypted secrets.
+ * Useful when you need to pass env to libraries or access multiple values.
+ *
+ * @returns The env object with all bindings and decrypted secrets
+ */
+export function getEnv<T = Record<string, unknown>>(): T {
+	const env = envStore.getStore();
+
+	if (!env) {
+		throw new Error('[secrets] getEnv() called outside of withSecrets() context');
+	}
+
+	return env as T;
 }

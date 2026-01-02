@@ -5,7 +5,7 @@
  * (safe to commit) and decrypt them at runtime using dotenvx.
  */
 
-import { withSecrets, getSecret, getAllSecrets } from './secrets';
+import { withSecrets, getSecret, getBinding, getEnv } from './secrets';
 
 // Example: A separate function that needs access to secrets
 // No need to pass env around - just import getSecret()
@@ -38,14 +38,41 @@ export default {
 			}
 
 			if (url.pathname === '/debug') {
-				// Show all secrets (don't do this in production!)
-				const all = getAllSecrets();
+				// Show that bindings are preserved and secrets are decrypted
+				const kv = getBinding<KVNamespace>('DEMO_KV');
+
 				return Response.json({
-					message: 'All decrypted secrets',
-					count: Object.keys(all).length,
-					keys: Object.keys(all),
-					// Show that MY_SECRET was decrypted
-					my_secret_preview: all.MY_SECRET?.substring(0, 20) + '...',
+					message: 'Environment inspection',
+					secrets: {
+						MY_SECRET_decrypted: getSecret('MY_SECRET')?.substring(0, 20) + '...',
+						MY_SECRET_is_string: typeof getSecret('MY_SECRET') === 'string',
+					},
+					bindings_preserved: {
+						// KV binding is an object, not destroyed by withSecrets()
+						DEMO_KV_type: typeof kv,
+						DEMO_KV_has_get_method: typeof kv?.get === 'function',
+						DEMO_KV_has_put_method: typeof kv?.put === 'function',
+					},
+					note: 'Only strings starting with "encrypted:" are decrypted. Bindings (KV, D1, DO, etc.) pass through unchanged.',
+				});
+			}
+
+			if (url.pathname === '/kv-test') {
+				// Demonstrate KV actually works after withSecrets()
+				const kv = getBinding<KVNamespace>('DEMO_KV');
+				const testKey = 'test-key';
+
+				// Write a value
+				await kv.put(testKey, `Written at ${new Date().toISOString()}`);
+
+				// Read it back
+				const value = await kv.get(testKey);
+
+				return Response.json({
+					message: 'KV binding works correctly after withSecrets()',
+					key: testKey,
+					value: value,
+					success: value !== null,
 				});
 			}
 
@@ -57,7 +84,8 @@ export default {
 					endpoints: {
 						'/secret': 'Shows the decrypted MY_SECRET value',
 						'/external': 'Shows getSecret() used in a separate function',
-						'/debug': 'Lists all available secrets',
+						'/debug': 'Inspects env types (secrets vs bindings)',
+						'/kv-test': 'Proves KV binding works after withSecrets()',
 					},
 					how_it_works: [
 						'1. Encrypted values stored in wrangler.jsonc vars (safe to commit)',
