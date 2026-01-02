@@ -44,16 +44,21 @@ export default {
 				return Response.json({
 					message: 'Environment inspection',
 					secrets: {
-						MY_SECRET_decrypted: getSecret('MY_SECRET')?.substring(0, 20) + '...',
-						MY_SECRET_is_string: typeof getSecret('MY_SECRET') === 'string',
+						// Encrypted values are decrypted
+						MY_SECRET: getSecret('MY_SECRET')?.substring(0, 20) + '...',
 					},
-					bindings_preserved: {
+					vars: {
+						// Plain string vars pass through unchanged
+						NOT_ENCRYPTED: getSecret('NOT_ENCRYPTED'),
+						DOTENV_PUBLIC_KEY: getSecret('DOTENV_PUBLIC_KEY')?.substring(0, 20) + '...',
+					},
+					bindings: {
 						// KV binding is an object, not destroyed by withSecrets()
 						DEMO_KV_type: typeof kv,
 						DEMO_KV_has_get_method: typeof kv?.get === 'function',
 						DEMO_KV_has_put_method: typeof kv?.put === 'function',
 					},
-					note: 'Only strings starting with "encrypted:" are decrypted. Bindings (KV, D1, DO, etc.) pass through unchanged.',
+					note: 'Only strings starting with "encrypted:" are decrypted. Plain vars and bindings pass through unchanged.',
 				});
 			}
 
